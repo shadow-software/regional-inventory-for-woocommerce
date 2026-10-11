@@ -24,12 +24,33 @@ define( 'RIFW_VERSION', '0.1.0' );
 define( 'RIFW_FILE', __FILE__ );
 define( 'RIFW_PATH', plugin_dir_path( __FILE__ ) );
 
-/**
- * Bootstrap placeholder — implementation lands behind PHPUnit coverage.
- *
- * @see https://github.com/shadow-software/aura-labs/issues/1
- */
-function rifw_bootstrap(): void {
-	// Intentionally empty in 0.1.0 scaffold.
+$rifw_autoload = RIFW_PATH . 'vendor/autoload.php';
+if ( is_readable( $rifw_autoload ) ) {
+	require_once $rifw_autoload;
+} else {
+	// Fallback PSR-4 without Composer (WP.org zip without vendor).
+	spl_autoload_register(
+		static function ( string $class ): void {
+			if ( strpos( $class, 'RegionalInventory\\' ) !== 0 ) {
+				return;
+			}
+			$rel = str_replace( 'RegionalInventory\\', '', $class );
+			$rel = str_replace( '\\', '/', $rel );
+			$file = RIFW_PATH . 'includes/' . $rel . '.php';
+			if ( is_readable( $file ) ) {
+				require_once $file;
+			}
+		}
+	);
 }
-add_action( 'plugins_loaded', 'rifw_bootstrap' );
+
+require_once RIFW_PATH . 'includes/Installer.php';
+register_activation_hook( __FILE__, array( \RegionalInventory\Installer::class, 'activate' ) );
+
+add_action(
+	'plugins_loaded',
+	static function (): void {
+		\RegionalInventory\Plugin::instance()->boot();
+	},
+	20
+);

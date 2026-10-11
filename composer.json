@@ -1,0 +1,25 @@
+{
+    "name": "shadow-software/regional-inventory-for-woocommerce",
+    "description": "Continent/region inventory pools, reservations, and market-aware stock for WooCommerce.",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=7.4"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10"
+    },
+    "autoload": {
+        "psr-4": {
+            "RegionalInventory\\": "includes/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "RegionalInventory\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    }
+}
