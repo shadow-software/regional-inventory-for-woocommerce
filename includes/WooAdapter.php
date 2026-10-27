@@ -49,12 +49,11 @@ final class WooAdapter {
 	 * @param \WC_Product $product  Product.
 	 */
 	public function filter_is_in_stock( $in_stock, $product ) {
-		if ( ! $product instanceof \WC_Product || ! $product->managing_stock() ) {
+		if ( ! $product instanceof \WC_Product || ! $product->managing_stock() || ! $this->use_pool_stock() ) {
 			return $in_stock;
 		}
-		$id  = $product->is_type( 'variation' ) ? $product->get_parent_id() : $product->get_id();
-		$vid = $product->is_type( 'variation' ) ? $product->get_id() : 0;
-		return $this->service->available( (int) $id, (int) $vid, $this->active_pool() ) > 0;
+		list( $id, $vid ) = $this->balance_ids_for_product( $product );
+		return $this->service->available( $id, $vid, $this->active_pool() ) > 0;
 	}
 
 	/**
@@ -62,12 +61,11 @@ final class WooAdapter {
 	 * @param \WC_Product $product Product.
 	 */
 	public function filter_stock_qty( $qty, $product ) {
-		if ( ! $product instanceof \WC_Product ) {
+		if ( ! $product instanceof \WC_Product || ! $product->managing_stock() || ! $this->use_pool_stock() ) {
 			return $qty;
 		}
-		$id  = $product->is_type( 'variation' ) ? $product->get_parent_id() : $product->get_id();
-		$vid = $product->is_type( 'variation' ) ? $product->get_id() : 0;
-		return $this->service->available( (int) $id, (int) $vid, $this->active_pool() );
+		list( $id, $vid ) = $this->balance_ids_for_product( $product );
+		return $this->service->available( $id, $vid, $this->active_pool() );
 	}
 
 	/**
@@ -81,6 +79,7 @@ final class WooAdapter {
 			return $passed;
 		}
 		$pool = $this->active_pool();
+		list( $product_id, $variation_id ) = $this->balance_ids( (int) $product_id, (int) $variation_id );
 		if ( ! $this->service->can_fulfill( (int) $product_id, (int) $variation_id, $pool, (int) $quantity ) ) {
 			wc_add_notice( __( 'Not enough stock in this region.', 'regional-inventory-for-woocommerce' ), 'error' );
 			return false;
@@ -96,6 +95,7 @@ final class WooAdapter {
 	 */
 	public function on_add_to_cart( $cart_item_key, $product_id, $quantity, $variation_id, $variation, $cart_item_data ) {
 		$holder = $this->holder_key();
+		list( $product_id, $variation_id ) = $this->balance_ids( (int) $product_id, (int) $variation_id );
 		$id     = $this->service->reserve( (int) $product_id, (int) $variation_id, $this->active_pool(), (int) $quantity, $holder . ':' . $cart_item_key );
 		if ( null === $id ) {
 			return;
@@ -186,13 +186,12 @@ final class WooAdapter {
 			if ( ! $product ) {
 				continue;
 			}
-			$id  = $product->is_type( 'variation' ) ? $product->get_parent_id() : $product->get_id();
-			$vid = $product->is_type( 'variation' ) ? $product->get_id() : 0;
+			list( $id, $vid ) = $this->balance_ids_for_product( $product );
 			$this->service->set_on_hand(
-				(int) $id,
-				(int) $vid,
+				$id,
+				$vid,
 				$pool,
-				$this->service->snapshot( (int) $id, (int) $vid, $pool )['on_hand'] + (int) $item->get_quantity()
+				$this->service->snapshot( $id, $vid, $pool )['on_hand'] + (int) $item->get_quantity()
 			);
 		}
 	}
@@ -217,11 +216,10 @@ final class WooAdapter {
 			if ( ! $product ) {
 				continue;
 			}
-			$id  = $product->is_type( 'variation' ) ? $product->get_parent_id() : $product->get_id();
-			$vid = $product->is_type( 'variation' ) ? $product->get_id() : 0;
-			$qty = abs( (int) $item->get_quantity() );
-			$snap = $this->service->snapshot( (int) $id, (int) $vid, $pool );
-			$this->service->set_on_hand( (int) $id, (int) $vid, $pool, $snap['on_hand'] + $qty );
+			list( $id, $vid ) = $this->balance_ids_for_product( $product );
+			$qty  = abs( (int) $item->get_quantity() );
+			$snap = $this->service->snapshot( $id, $vid, $pool );
+			$this->service->set_on_hand( $id, $vid, $pool, $snap['on_hand'] + $qty );
 		}
 	}
 
@@ -231,6 +229,69 @@ final class WooAdapter {
 	 */
 	public function block_global_reduce( $can_reduce, $order ) {
 		return false;
+	}
+
+	/**
+	 * Language copies sell the same vials. Balances live on the English product.
+	 *
+	 * @return array{0:int,1:int}
+	 */
+	public function balance_ids_for_product( \WC_Product $product ): array {
+		if ( $product->is_type( 'variation' ) ) {
+			return $this->balance_ids( (int) $product->get_parent_id(), (int) $product->get_id() );
+		}
+		return $this->balance_ids( (int) $product->get_id(), 0 );
+	}
+
+	/**
+	 * @return array{0:int,1:int} Parent id, variation id (0 for a simple product).
+	 */
+	public function balance_ids( int $product_id, int $variation_id ): array {
+		if ( $variation_id > 0 ) {
+			$variation_id = $this->canonical_post_id( $variation_id );
+			$parent       = (int) wp_get_post_parent_id( $variation_id );
+			if ( $parent > 0 ) {
+				$product_id = $parent;
+			} else {
+				$product_id = $this->canonical_post_id( $product_id );
+			}
+			return array( $product_id, $variation_id );
+		}
+		return array( $this->canonical_post_id( $product_id ), 0 );
+	}
+
+	public function canonical_post_id( int $post_id ): int {
+		if ( $post_id < 1 ) {
+			return $post_id;
+		}
+		$meta = (int) get_post_meta( $post_id, '_aura_stock_canonical', true );
+		if ( $meta > 0 ) {
+			return $meta;
+		}
+		if ( ! function_exists( 'pll_get_post' ) ) {
+			return $post_id;
+		}
+		$lang = 'en';
+		if ( function_exists( 'pll_default_language' ) ) {
+			$default = pll_default_language( 'slug' );
+			if ( is_string( $default ) && '' !== $default ) {
+				$lang = $default;
+			}
+		}
+		$canonical = pll_get_post( $post_id, $lang );
+		$canonical = is_numeric( $canonical ) ? (int) $canonical : 0;
+		return $canonical > 0 ? $canonical : $post_id;
+	}
+
+	/**
+	 * Admin screens show the stored WooCommerce quantity. The storefront and
+	 * admin-ajax add-to-cart use the regional pool.
+	 */
+	private function use_pool_stock(): bool {
+		if ( function_exists( 'is_admin' ) && is_admin() && ! ( function_exists( 'wp_doing_ajax' ) && wp_doing_ajax() ) ) {
+			return false;
+		}
+		return true;
 	}
 
 	private function holder_key(): string {
