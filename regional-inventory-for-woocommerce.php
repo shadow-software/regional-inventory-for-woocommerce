@@ -27,22 +27,24 @@ define( 'RIFW_PATH', plugin_dir_path( __FILE__ ) );
 $rifw_autoload = RIFW_PATH . 'vendor/autoload.php';
 if ( is_readable( $rifw_autoload ) ) {
 	require_once $rifw_autoload;
-} else {
-	// Fallback PSR-4 without Composer (WP.org zip without vendor).
-	spl_autoload_register(
-		static function ( string $class ): void {
-			if ( strpos( $class, 'RegionalInventory\\' ) !== 0 ) {
-				return;
-			}
-			$rel = str_replace( 'RegionalInventory\\', '', $class );
-			$rel = str_replace( '\\', '/', $rel );
-			$file = RIFW_PATH . 'includes/' . $rel . '.php';
-			if ( is_readable( $file ) ) {
-				require_once $file;
-			}
-		}
-	);
 }
+
+// Always register plugin PSR-4 fallback. Production installs sometimes ship a
+// readable vendor/autoload.php that does not map RegionalInventory\\ (partial
+// vendor tree, stale dump), which skipped this loader and fatally broke boot.
+spl_autoload_register(
+	static function ( string $class ): void {
+		if ( strpos( $class, 'RegionalInventory\\' ) !== 0 ) {
+			return;
+		}
+		$rel = str_replace( 'RegionalInventory\\', '', $class );
+		$rel = str_replace( '\\', '/', $rel );
+		$file = RIFW_PATH . 'includes/' . $rel . '.php';
+		if ( is_readable( $file ) ) {
+			require_once $file;
+		}
+	}
+);
 
 require_once RIFW_PATH . 'includes/Installer.php';
 register_activation_hook( __FILE__, array( \RegionalInventory\Installer::class, 'activate' ) );
