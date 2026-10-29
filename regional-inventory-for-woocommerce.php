@@ -49,9 +49,21 @@ spl_autoload_register(
 require_once RIFW_PATH . 'includes/Installer.php';
 register_activation_hook( __FILE__, array( \RegionalInventory\Installer::class, 'activate' ) );
 
+// Require the bootstrap class by path. The autoload fallback above is not
+// enough when a release rsync has removed includes/ or vendor for a moment:
+// plugins_loaded then fatals the whole storefront with
+// Class "RegionalInventory\Plugin" not found.
+$rifw_plugin_class = RIFW_PATH . 'includes/Plugin.php';
+if ( is_readable( $rifw_plugin_class ) ) {
+	require_once $rifw_plugin_class;
+}
+
 add_action(
 	'plugins_loaded',
 	static function (): void {
+		if ( ! class_exists( \RegionalInventory\Plugin::class, false ) ) {
+			return;
+		}
 		\RegionalInventory\Plugin::instance()->boot();
 	},
 	20
